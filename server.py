@@ -320,7 +320,7 @@ def dashboard():
 <html>
 <head>
 <meta name='viewport' content='width=device-width, initial-scale=1'>
-<title>Pinpoint Trading</title>
+<title>PHILIP'S TRADE DESK</title>
 <meta http-equiv='refresh' content='30'>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
