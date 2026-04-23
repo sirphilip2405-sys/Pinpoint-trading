@@ -229,6 +229,98 @@ def webhook():
             webhook_cache[symbol] = {}
         webhook_cache[symbol][tf] = data
     return jsonify({"status": "ok"})
+    @app.route("/dashboard")
+def dashboard():
+    results = []
+    for symbol in WATCHLIST:
+        try:
+            results.append(analyze(symbol))
+        except Exception as e:
+            results.append({"symbol": symbol, "score": 0, "reason": str(e), "signal": None})
+    results.sort(key=lambda x: x["score"], reverse=True)
+
+    rows = ""
+    for r in results:
+        score = r.get("score", 0)
+        symbol = r.get("symbol", "")
+        reason = r.get("reason", "")
+        direction = r.get("direction", "-")
+        signal = r.get("signal") or {}
+        entry = signal.get("entry", "-")
+        sl = signal.get("stop_loss", "-")
+        tp = signal.get("take_profit", "-")
+        size = signal.get("position_size", "-")
+
+        if score >= 70:
+            color = "#00ff88"
+            emoji = "🟢"
+        elif score >= 40:
+            color = "#ffaa00"
+            emoji = "🟡"
+        else:
+            color = "#ff4444"
+            emoji = "🔴"
+
+        dir_color = "#00ff88" if direction == "long" else "#ff4444" if direction == "short" else "#888"
+
+        rows += f"""
+        <tr>
+            <td><b style='color:#fff'>{symbol}</b></td>
+            <td><span style='color:{color};font-size:1.3em;font-weight:bold'>{emoji} {score}</span></td>
+            <td><span style='color:{dir_color}'>{direction.upper() if direction else '-'}</span></td>
+            <td style='color:#ccc'>{entry}</td>
+            <td style='color:#ff6b6b'>{sl}</td>
+            <td style='color:#00ff88'>{tp}</td>
+            <td style='color:#aaa'>{size}</td>
+            <td style='color:#888;font-size:0.8em'>{reason[:60]}...</td>
+        </tr>"""
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta name='viewport' content='width=device-width, initial-scale=1'>
+    <title>Pinpoint Trading</title>
+    <meta http-equiv='refresh' content='30'>
+    <style>
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{ background: #0a0a0f; color: #fff; font-family: monospace; padding: 10px; }}
+        h1 {{ color: #00ff88; text-align: center; padding: 15px 0; font-size: 1.4em; letter-spacing: 2px; }}
+        .subtitle {{ text-align: center; color: #555; font-size: 0.8em; margin-bottom: 15px; }}
+        table {{ width: 100%; border-collapse: collapse; font-size: 0.75em; }}
+        th {{ background: #111; color: #00ff88; padding: 8px 4px; text-align: left; border-bottom: 1px solid #222; }}
+        td {{ padding: 8px 4px; border-bottom: 1px solid #111; vertical-align: middle; }}
+        tr:hover {{ background: #111; }}
+        .refresh {{ text-align: center; color: #333; font-size: 0.7em; margin-top: 15px; }}
+        .links {{ display: flex; gap: 10px; justify-content: center; margin: 10px 0; flex-wrap: wrap; }}
+        .links a {{ color: #00ff88; text-decoration: none; border: 1px solid #00ff88; padding: 5px 10px; border-radius: 4px; font-size: 0.8em; }}
+    </style>
+</head>
+<body>
+    <h1>⚡ PINPOINT TRADING</h1>
+    <p class='subtitle'>Auto-refresh every 30s · {datetime.now().strftime("%H:%M:%S")}</p>
+    <div class='links'>
+        <a href='/dashboard'>🔄 Refresh</a>
+        <a href='/signals'>📡 Signals JSON</a>
+        <a href='/scan'>📊 Raw Scan</a>
+        <a href='/health'>💚 Health</a>
+    </div>
+    <table>
+        <tr>
+            <th>Symbol</th>
+            <th>Score</th>
+            <th>Dir</th>
+            <th>Entry</th>
+            <th>SL</th>
+            <th>TP</th>
+            <th>Size</th>
+            <th>Reason</th>
+        </tr>
+        {rows}
+    </table>
+    <p class='refresh'>Auto-refreshes every 30 seconds</p>
+</body>
+</html>"""
+    return html
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000, debug=False)
