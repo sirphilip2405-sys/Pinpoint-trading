@@ -5,8 +5,8 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-WATCHLIST = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XAUUSDT"]
-ACCOUNT_BALANCE = 10000
+WATCHLIST = ["BTCUSDT", "ETHUSDT", "GBPUSDT", "EURUSDT", "XAUUSDT", "USDTJPY"]
+ACCOUNT_BALANCE = 10
 RISK_PCT = 0.01
 ATR_MULTIPLIER = 1.5
 MIN_RR = 3.0
@@ -17,6 +17,62 @@ live_signals = {}
 def fetch_binance_ohlcv(symbol, interval, limit=100):
     try:
         url = "https://api.binance.com/api/v3/klines"
+        params = {"symbol": symbol, "interval": interval, "limit": limit}
+        r = requests.get(url, params=params, timeout=10)
+        data = r.json()
+        if isinstance(data, dict) and data.get("code"):
+            return fetch_forex_ohlcv(symbol, interval, limit)
+        candles = []
+        for d in data:
+            candles.append({
+                "open": float(d[1]),
+                "high": float(d[2]),
+                "low": float(d[3]),
+                "close": float(d[4]),
+                "volume": float(d[5])
+            })
+        return candles
+    except Exception as e:
+        return fetch_forex_ohlcv(symbol, interval, limit)
+
+def fetch_forex_ohlcv(symbol, interval, limit=100):
+    try:
+        forex_map = {
+            "EURUSDT": "EURUSD",
+            "GBPUSDT": "GBPUSD",
+            "XAUUSDT": "XAUUSD",
+            "USDTJPY": "USDJPY"
+        }
+        pair = forex_map.get(symbol, symbol)
+        tf_map = {"5m": "5min", "15m": "15min", "1h": "60min"}
+        tf = tf_map.get(interval, "60min")
+        url = "https://www.alphavantage.co/query"
+        params = {
+            "function": "FX_INTRADAY",
+            "from_symbol": pair[:3],
+            "to_symbol": pair[3:],
+            "interval": tf,
+            "outputsize": "compact",
+            "apikey": "demo"
+        }
+        r = requests.get(url, params=params, timeout=10)
+        data = r.json()
+        key = "Time Series FX (" + tf + ")"
+        if key not in data:
+            return None
+        candles = []
+        for ts, v in list(data[key].items())[:limit]:
+            candles.append({
+                "open": float(v["1. open"]),
+                "high": float(v["2. high"]),
+                "low": float(v["3. low"]),
+                "close": float(v["4. close"]),
+                "volume": 1000.0
+            })
+        candles.reverse()
+        return candles
+    except Exception as e:
+        return None
         params = {"symbol": symbol, "interval": interval, "limit": limit}
         r = requests.get(url, params=params, timeout=10)
         data = r.json()
