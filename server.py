@@ -165,7 +165,6 @@ m15 = tf_data.get("M30", {})
 h1_trend = h1.get("structure", {}).get("trend", "neutral")
 m5_trend = m5.get("structure", {}).get("trend", "neutral")
 m15_trend = m15.get("structure", {}).get("trend", "neutral") if m15 else "neutral"
-score = 0
     score = 0
     reasons = []
     direction = None
