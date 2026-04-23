@@ -337,7 +337,7 @@ tr:hover { background: #111; }
 </style>
 </head>
 <body>
-<h1>PINPOINT TRADING</h1>
+<h1>PHILIP'S TRADE DESK</h1>
 <p class='sub'>""" + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + """ · Auto-refresh 30s</p>
 <div class='links'>
 <a href='/dashboard'>Refresh</a>
