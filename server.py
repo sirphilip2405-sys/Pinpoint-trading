@@ -38,54 +38,45 @@ def fetch_binance_ohlcv(symbol, interval, limit=100):
 def fetch_forex_ohlcv(symbol, interval, limit=100):
     try:
         forex_map = {
-            "EURUSDT": "EURUSD",
-            "GBPUSDT": "GBPUSD",
-            "XAUUSDT": "XAUUSD",
-            "USDTJPY": "USDJPY"
+            "EURUSDT": "EURUSD=X",
+            "GBPUSDT": "GBPUSD=X",
+            "XAUUSDT": "GC=F",
+            "USDTJPY": "USDJPY=X"
         }
-        pair = forex_map.get(symbol, symbol)
-        tf_map = {"5m": "5min", "15m": "15min", "1h": "60min"}
-        tf = tf_map.get(interval, "60min")
-        url = "https://www.alphavantage.co/query"
+        tf_map = {
+            "5m": "5m",
+            "15m": "15m",
+            "1h": "1h"
+        }
+        ticker = forex_map.get(symbol, symbol)
+        interval_yf = tf_map.get(interval, "1h")
+        period = "5d" if interval in ["5m", "15m"] else "30d"
+        url = "https://query1.finance.yahoo.com/v8/finance/chart/" + ticker
         params = {
-            "function": "FX_INTRADAY",
-            "from_symbol": pair[:3],
-            "to_symbol": pair[3:],
-            "interval": tf,
-            "outputsize": "compact",
-            "apikey": "demo"
+            "interval": interval_yf,
+            "range": period
         }
-        r = requests.get(url, params=params, timeout=10)
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
+        r = requests.get(url, params=params, headers=headers, timeout=10)
         data = r.json()
-        key = "Time Series FX (" + tf + ")"
-        if key not in data:
-            return None
+        result = data["chart"]["result"][0]
+        timestamps = result["timestamp"]
+        ohlcv = result["indicators"]["quote"][0]
         candles = []
-        for ts, v in list(data[key].items())[:limit]:
-            candles.append({
-                "open": float(v["1. open"]),
-                "high": float(v["2. high"]),
-                "low": float(v["3. low"]),
-                "close": float(v["4. close"]),
-                "volume": 1000.0
-            })
-        candles.reverse()
-        return candles
-    except Exception as e:
-        return None
-        params = {"symbol": symbol, "interval": interval, "limit": limit}
-        r = requests.get(url, params=params, timeout=10)
-        data = r.json()
-        candles = []
-        for d in data:
-            candles.append({
-                "open": float(d[1]),
-                "high": float(d[2]),
-                "low": float(d[3]),
-                "close": float(d[4]),
-                "volume": float(d[5])
-            })
-        return candles
+        for i in range(len(timestamps)):
+            try:
+                candles.append({
+                    "open":   float(ohlcv["open"][i]),
+                    "high":   float(ohlcv["high"][i]),
+                    "low":    float(ohlcv["low"][i]),
+                    "close":  float(ohlcv["close"][i]),
+                    "volume": float(ohlcv.get("volume", [1000]*len(timestamps))[i] or 1000)
+                })
+            except:
+                continue
+        return candles[-limit:] if len(candles) > limit else candles
     except Exception as e:
         return None
 
