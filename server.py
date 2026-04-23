@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, redirect
 import requests
 from datetime import datetime
 
@@ -12,6 +12,7 @@ MIN_RR = 3.0
 
 webhook_cache = {}
 live_signals = {}
+trade_log = []
 
 def fetch_binance_ohlcv(symbol, interval, limit=100):
     try:
@@ -275,6 +276,27 @@ def webhook():
         webhook_cache[symbol][tf] = data
     return jsonify({"status": "ok"})
 
+@app.route("/log")
+def log_trade():
+    symbol = request.args.get("symbol", "").upper()
+    direction = request.args.get("dir", "")
+    result = request.args.get("result", "")
+    score = request.args.get("score", "0")
+    if symbol and result in ["win", "loss"]:
+        trade_log.append({
+            "time": datetime.now().strftime("%H:%M"),
+            "symbol": symbol,
+            "direction": direction,
+            "result": result,
+            "score": score
+        })
+    return redirect("/dashboard")
+
+@app.route("/clearlog")
+def clear_log():
+    trade_log.clear()
+    return redirect("/dashboard")
+
 @app.route("/dashboard")
 def dashboard():
     results = []
@@ -316,6 +338,24 @@ def dashboard():
         rows += "<td style='color:#aaa'>" + str(size) + "</td>"
         rows += "<td style='color:#666;font-size:0.8em'>" + reason_short + "</td>"
         rows += "</tr>"
+    wins = len([t for t in trade_log if t["result"] == "win"])
+    losses = len([t for t in trade_log if t["result"] == "loss"])
+    total = wins + losses
+    winrate = round((wins / total * 100)) if total > 0 else 0
+    trade_log_rows = ""
+    for t in reversed(trade_log):
+        res_color = "#00ff88" if t["result"] == "win" else "#ff4444"
+        res_label = "WIN" if t["result"] == "win" else "LOSS"
+        dir_color = "#00ff88" if t["direction"] == "long" else "#ff4444"
+        trade_log_rows += "<tr>"
+        trade_log_rows += "<td style='color:#888'>" + t["time"] + "</td>"
+        trade_log_rows += "<td style='color:#fff'>" + t["symbol"] + "</td>"
+        trade_log_rows += "<td style='color:" + dir_color + "'>" + t["direction"].upper() + "</td>"
+        trade_log_rows += "<td style='color:" + res_color + ";font-weight:bold'>" + res_label + "</td>"
+        trade_log_rows += "<td style='color:#ffaa00'>" + t["score"] + "</td>"
+        trade_log_rows += "</tr>"
+    if not trade_log:
+        trade_log_rows = "<tr><td colspan='5' style='color:#444;text-align:center;padding:20px;'>No trades logged today</td></tr>"
     html = """<!DOCTYPE html>
 <html>
 <head>
@@ -326,6 +366,7 @@ def dashboard():
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { background: #0a0a0f; color: #fff; font-family: monospace; padding: 10px; }
 h1 { color: #00ff88; text-align: center; padding: 15px 0; font-size: 1.4em; letter-spacing: 2px; }
+h2 { color: #00ff88; text-align: center; margin-top: 30px; font-size: 1.1em; letter-spacing: 2px; }
 .sub { text-align: center; color: #555; font-size: 0.8em; margin-bottom: 15px; }
 table { width: 100%; border-collapse: collapse; font-size: 0.75em; }
 th { background: #111; color: #00ff88; padding: 8px 4px; text-align: left; border-bottom: 1px solid #222; }
@@ -333,7 +374,10 @@ td { padding: 8px 4px; border-bottom: 1px solid #111; vertical-align: middle; }
 tr:hover { background: #111; }
 .links { display: flex; gap: 8px; justify-content: center; margin: 10px 0; flex-wrap: wrap; }
 .links a { color: #00ff88; text-decoration: none; border: 1px solid #00ff88; padding: 5px 10px; border-radius: 4px; font-size: 0.8em; }
-.footer { text-align: center; color: #333; font-size: 0.7em; margin-top: 15px; }
+.stats { display: flex; justify-content: space-around; margin-top: 15px; padding: 10px; background: #111; border-radius: 8px; }
+.stat-val { font-size: 1.4em; font-weight: bold; text-align: center; }
+.stat-lbl { color: #555; font-size: 0.7em; text-align: center; }
+.footer { text-align: center; color: #333; font-size: 0.7em; margin-top: 15px; padding-bottom: 20px; }
 </style>
 </head>
 <body>
@@ -351,7 +395,34 @@ tr:hover { background: #111; }
 <th>Size</th><th>Reason</th>
 </tr>""" + rows + """
 </table>
-<p class='footer'>Auto-refreshes every 30 seconds</p>
+
+<h2>TODAY'S TRADE LOG</h2>
+<p class='sub'>Tap a symbol row to log your trade</p>
+<div class='links'>""" + "".join([
+    "<a href='/log?symbol=" + r.get("symbol","") +
+    "&dir=" + (r.get("direction") or "long") +
+    "&result=win&score=" + str(r.get("score",0)) +
+    "' style='color:#00ff88;border-color:#00ff88'>" + r.get("symbol","") + " W</a>" +
+    "<a href='/log?symbol=" + r.get("symbol","") +
+    "&dir=" + (r.get("direction") or "long") +
+    "&result=loss&score=" + str(r.get("score",0)) +
+    "' style='color:#ff4444;border-color:#ff4444'>" + r.get("symbol","") + " L</a>"
+    for r in results if r.get("signal")
+]) + """
+<a href='/clearlog' style='color:#888;border-color:#444'>Clear</a>
+</div>
+<table>
+<tr>
+<th>Time</th><th>Symbol</th><th>Dir</th><th>Result</th><th>Score</th>
+</tr>""" + trade_log_rows + """
+</table>
+<div class='stats'>
+<div><div class='stat-val' style='color:#00ff88'>""" + str(wins) + """</div><div class='stat-lbl'>WINS</div></div>
+<div><div class='stat-val' style='color:#ff4444'>""" + str(losses) + """</div><div class='stat-lbl'>LOSSES</div></div>
+<div><div class='stat-val' style='color:#ffaa00'>""" + str(winrate) + """%</div><div class='stat-lbl'>WIN RATE</div></div>
+<div><div class='stat-val' style='color:#fff'>""" + str(total) + """</div><div class='stat-lbl'>TOTAL</div></div>
+</div>
+<p class='footer'>Pinpoint Trading System</p>
 </body>
 </html>"""
     return html
