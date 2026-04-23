@@ -145,7 +145,7 @@ def detect_structure(candles, lookback=10):
     }
 
 def analyze(symbol):
-    tf_map = {"M5": "5m", "M15": "15m", "H1": "1h"}
+    tf_map = {"M15": "15m", "M30": "30m", "H1": "1h"}
     tf_data = {}
     for tf, interval in tf_map.items():
         candles = fetch_binance_ohlcv(symbol, interval)
@@ -160,11 +160,12 @@ def analyze(symbol):
         return {"symbol": symbol, "score": 0,
                 "reason": "Not enough data", "signal": None}
     h1 = tf_data.get("H1", {})
-    m5 = tf_data.get("M5", {})
+    m5 = tf_data.get("M15", {})
     m15 = tf_data.get("M15", {})
     h1_trend = h1.get("structure", {}).get("trend", "neutral")
     m5_trend = m5.get("structure", {}).get("trend", "neutral")
-    m15_trend = m15.get("structure", {}).get("trend", "neutral") if m15 else "neutral"
+    m15 = tf_data.get("M30", {})
+m15_trend = m15.get("structure", {}).get("trend", "neutral") if m15 else "neutral"
     score = 0
     reasons = []
     direction = None
