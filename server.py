@@ -160,12 +160,12 @@ def analyze(symbol):
         return {"symbol": symbol, "score": 0,
                 "reason": "Not enough data", "signal": None}
     h1 = tf_data.get("H1", {})
-    m5 = tf_data.get("M15", {})
-    m15 = tf_data.get("M15", {})
-    h1_trend = h1.get("structure", {}).get("trend", "neutral")
-    m5_trend = m5.get("structure", {}).get("trend", "neutral")
-    m15 = tf_data.get("M30", {})
+m5 = tf_data.get("M15", {})
+m15 = tf_data.get("M30", {})
+h1_trend = h1.get("structure", {}).get("trend", "neutral")
+m5_trend = m5.get("structure", {}).get("trend", "neutral")
 m15_trend = m15.get("structure", {}).get("trend", "neutral") if m15 else "neutral"
+score = 0
     score = 0
     reasons = []
     direction = None
