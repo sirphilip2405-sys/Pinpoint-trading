@@ -1,12 +1,11 @@
 from flask import Flask, request, jsonify
 import requests
-import json
 from datetime import datetime
 
 app = Flask(__name__)
 
 WATCHLIST = ["BTCUSDT", "ETHUSDT", "GBPUSDT", "EURUSDT", "XAUUSDT", "USDTJPY"]
-ACCOUNT_BALANCE = 10
+ACCOUNT_BALANCE = 10000
 RISK_PCT = 0.01
 ATR_MULTIPLIER = 1.5
 MIN_RR = 3.0
@@ -44,21 +43,16 @@ def fetch_forex_ohlcv(symbol, interval, limit=100):
             "USDTJPY": "USDJPY=X"
         }
         tf_map = {
-            "5m": "5m",
             "15m": "15m",
+            "30m": "30m",
             "1h": "1h"
         }
         ticker = forex_map.get(symbol, symbol)
         interval_yf = tf_map.get(interval, "1h")
-        period = "5d" if interval in ["5m", "15m"] else "30d"
+        period = "5d" if interval in ["15m", "30m"] else "30d"
         url = "https://query1.finance.yahoo.com/v8/finance/chart/" + ticker
-        params = {
-            "interval": interval_yf,
-            "range": period
-        }
-        headers = {
-            "User-Agent": "Mozilla/5.0"
-        }
+        params = {"interval": interval_yf, "range": period}
+        headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, params=params, headers=headers, timeout=10)
         data = r.json()
         result = data["chart"]["result"][0]
@@ -68,10 +62,10 @@ def fetch_forex_ohlcv(symbol, interval, limit=100):
         for i in range(len(timestamps)):
             try:
                 candles.append({
-                    "open":   float(ohlcv["open"][i]),
-                    "high":   float(ohlcv["high"][i]),
-                    "low":    float(ohlcv["low"][i]),
-                    "close":  float(ohlcv["close"][i]),
+                    "open": float(ohlcv["open"][i]),
+                    "high": float(ohlcv["high"][i]),
+                    "low": float(ohlcv["low"][i]),
+                    "close": float(ohlcv["close"][i]),
                     "volume": float(ohlcv.get("volume", [1000]*len(timestamps))[i] or 1000)
                 })
             except:
@@ -160,54 +154,54 @@ def analyze(symbol):
         return {"symbol": symbol, "score": 0,
                 "reason": "Not enough data", "signal": None}
     h1 = tf_data.get("H1", {})
-m5 = tf_data.get("M15", {})
-m15 = tf_data.get("M30", {})
-h1_trend = h1.get("structure", {}).get("trend", "neutral")
-m5_trend = m5.get("structure", {}).get("trend", "neutral")
-m15_trend = m15.get("structure", {}).get("trend", "neutral") if m15 else "neutral"
+    m15 = tf_data.get("M15", {})
+    m30 = tf_data.get("M30", {})
+    h1_trend = h1.get("structure", {}).get("trend", "neutral")
+    m15_trend = m15.get("structure", {}).get("trend", "neutral")
+    m30_trend = m30.get("structure", {}).get("trend", "neutral") if m30 else "neutral"
     score = 0
     reasons = []
     direction = None
-    if h1_trend == m5_trend and h1_trend != "neutral":
+    if h1_trend == m15_trend and h1_trend != "neutral":
         score += 30
         direction = "long" if h1_trend == "bullish" else "short"
-        reasons.append("H1+M5 confluent (" + h1_trend + ")")
+        reasons.append("H1+M15 confluent (" + h1_trend + ")")
     else:
         return {"symbol": symbol, "score": 0,
-                "reason": "Trend mismatch H1=" + h1_trend + " M5=" + m5_trend,
+                "reason": "Trend mismatch H1=" + h1_trend + " M15=" + m15_trend,
                 "signal": None}
-    m5_struct = m5.get("structure", {})
-    if m5_struct.get("choch"):
+    m15_struct = m15.get("structure", {})
+    if m15_struct.get("choch"):
         score += 25
-        reasons.append("M5 CHoCH")
-    elif m5_struct.get("bos"):
+        reasons.append("M15 CHoCH")
+    elif m15_struct.get("bos"):
         score += 20
-        reasons.append("M5 BoS")
+        reasons.append("M15 BoS")
     h1_struct = h1.get("structure", {})
     if h1_struct.get("bos") or h1_struct.get("choch"):
         score += 15
         reasons.append("H1 structure confirmed")
-    m5_rsi = m5.get("rsi", 50)
-    if direction == "long" and 30 < m5_rsi < 65:
+    m15_rsi = m15.get("rsi", 50)
+    if direction == "long" and 30 < m15_rsi < 65:
         score += 10
-        reasons.append("RSI healthy (" + str(m5_rsi) + ")")
-    elif direction == "short" and 35 < m5_rsi < 70:
+        reasons.append("RSI healthy (" + str(m15_rsi) + ")")
+    elif direction == "short" and 35 < m15_rsi < 70:
         score += 10
-        reasons.append("RSI healthy (" + str(m5_rsi) + ")")
-    if m15_trend == h1_trend:
+        reasons.append("RSI healthy (" + str(m15_rsi) + ")")
+    if m30_trend == h1_trend:
         score += 10
-        reasons.append("M15 confirms")
-    entry = m5["candles"][-1]["close"]
-    atr = m5.get("atr", entry * 0.001)
-    swing_high = m5_struct.get("swing_high")
-    swing_low = m5_struct.get("swing_low")
+        reasons.append("M30 confirms")
+    entry = m15["candles"][-1]["close"]
+    atr = m15.get("atr", entry * 0.001)
+    m15_swing_high = m15_struct.get("swing_high")
+    m15_swing_low = m15_struct.get("swing_low")
     if direction == "long":
         sl_atr = entry - ATR_MULTIPLIER * atr
-        sl_swing = swing_low if swing_low and swing_low < entry else sl_atr
+        sl_swing = m15_swing_low if m15_swing_low and m15_swing_low < entry else sl_atr
         stop_loss = max(sl_atr, sl_swing)
     else:
         sl_atr = entry + ATR_MULTIPLIER * atr
-        sl_swing = swing_high if swing_high and swing_high > entry else sl_atr
+        sl_swing = m15_swing_high if m15_swing_high and m15_swing_high > entry else sl_atr
         stop_loss = min(sl_atr, sl_swing)
     risk = abs(entry - stop_loss)
     if risk < 0.000001:
@@ -343,7 +337,7 @@ tr:hover { background: #111; }
 </style>
 </head>
 <body>
-<h1>PHILIP'S TRADE DESK</h1>
+<h1>PINPOINT TRADING</h1>
 <p class='sub'>""" + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + """ · Auto-refresh 30s</p>
 <div class='links'>
 <a href='/dashboard'>Refresh</a>
