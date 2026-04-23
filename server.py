@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, redirect
 import requests
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 app = Flask(__name__)
 
@@ -382,7 +382,7 @@ tr:hover { background: #111; }
 </head>
 <body>
 <h1>PHILIP'S TRADE DESK</h1>
-<p class='sub'>""" + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + """ · Auto-refresh 30s</p>
+<p class='sub'>""" + (datetime.now(timezone.utc) + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S") + """ · Auto-refresh 30s</p>
 <div class='links'>
 <a href='/dashboard'>Refresh</a>
 <a href='/scan'>JSON</a>
