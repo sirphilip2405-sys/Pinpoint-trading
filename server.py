@@ -8,7 +8,7 @@ import time
 app = Flask(__name__)
 
 WATCHLIST = ["BTCUSDT", "ETHUSDT", "GBPUSDT", "EURUSDT", "XAUUSDT", "USDTJPY"]
-ACCOUNT_BALANCE = 10000
+ACCOUNT_BALANCE = 10
 RISK_PCT = 0.01
 ATR_MULTIPLIER = 1.5
 MIN_RR = 3.0
@@ -503,8 +503,12 @@ def health():
 def scan():
     results = []
     for symbol in WATCHLIST:
-        try:
-            results.append(analyze(symbol))
+    try:
+        result = analyze(symbol)
+        if result:
+            results.append(result)
+        else:
+            results.append({"symbol": symbol, "score": 0, "reason": "No data", "signal": None})
         except Exception as e:
             results.append({"symbol": symbol, "score": 0, "reason": str(e)})
     results.sort(key=lambda x: x["score"], reverse=True)
