@@ -13,6 +13,7 @@ MIN_RR = 3.0
 webhook_cache = {}
 live_signals = {}
 trade_log = []
+active_trades = {}
 
 def fetch_binance_ohlcv(symbol, interval, limit=100):
     try:
@@ -151,7 +152,7 @@ def analyze(symbol):
                 "rsi": compute_rsi(candles),
                 "structure": detect_structure(candles)
             }
-    if len(tf_data) < 2:
+    if len(tf_data) < 1:
         return {"symbol": symbol, "score": 0,
                 "reason": "Not enough data", "signal": None}
     h1 = tf_data.get("H1", {})
@@ -230,6 +231,8 @@ def analyze(symbol):
         }
     }
     live_signals[symbol] = signal
+    if symbol not in active_trades:
+        active_trades[symbol] = signal
     return {
         "symbol": symbol,
         "score": round(score, 1),
@@ -276,20 +279,32 @@ def webhook():
         webhook_cache[symbol][tf] = data
     return jsonify({"status": "ok"})
 
-@app.route("/log")
-def log_trade():
+@app.route("/close_trade")
+def close_trade():
     symbol = request.args.get("symbol", "").upper()
-    direction = request.args.get("dir", "")
     result = request.args.get("result", "")
-    score = request.args.get("score", "0")
-    if symbol and result in ["win", "loss"]:
+    if symbol in active_trades and result in ["win", "loss"]:
+        t = active_trades[symbol]
+        now = datetime.now(timezone.utc) + timedelta(hours=3)
         trade_log.append({
-            "time": datetime.now().strftime("%H:%M"),
+            "time": now.strftime("%H:%M"),
+            "date": now.strftime("%Y-%m-%d"),
             "symbol": symbol,
-            "direction": direction,
-            "result": result,
-            "score": score
+            "direction": t.get("direction", ""),
+            "entry": t.get("entry", 0),
+            "stop_loss": t.get("stop_loss", 0),
+            "take_profit": t.get("take_profit", 0),
+            "score": t.get("score", 0),
+            "result": result
         })
+        del active_trades[symbol]
+    return redirect("/dashboard")
+
+@app.route("/cancel_trade")
+def cancel_trade():
+    symbol = request.args.get("symbol", "").upper()
+    if symbol in active_trades:
+        del active_trades[symbol]
     return redirect("/dashboard")
 
 @app.route("/clearlog")
@@ -338,6 +353,24 @@ def dashboard():
         rows += "<td style='color:#aaa'>" + str(size) + "</td>"
         rows += "<td style='color:#666;font-size:0.8em'>" + reason_short + "</td>"
         rows += "</tr>"
+    active_rows = ""
+    if active_trades:
+        for sym, t in active_trades.items():
+            dir_color = "#00ff88" if t.get("direction") == "long" else "#ff4444"
+            active_rows += "<tr>"
+            active_rows += "<td style='color:#fff;font-weight:bold'>" + sym + "</td>"
+            active_rows += "<td style='color:" + dir_color + "'>" + (t.get("direction") or "").upper() + "</td>"
+            active_rows += "<td style='color:#ccc'>" + str(t.get("entry", "-")) + "</td>"
+            active_rows += "<td style='color:#ff6b6b'>" + str(t.get("stop_loss", "-")) + "</td>"
+            active_rows += "<td style='color:#00ff88'>" + str(t.get("take_profit", "-")) + "</td>"
+            active_rows += "<td style='color:#ffaa00'>" + str(t.get("score", "-")) + "</td>"
+            active_rows += "<td>"
+            active_rows += "<a href='/close_trade?symbol=" + sym + "&result=win' style='color:#00ff88;text-decoration:none;border:1px solid #00ff88;padding:2px 6px;border-radius:3px;font-size:0.8em;margin-right:4px;'>WIN</a>"
+            active_rows += "<a href='/close_trade?symbol=" + sym + "&result=loss' style='color:#ff4444;text-decoration:none;border:1px solid #ff4444;padding:2px 6px;border-radius:3px;font-size:0.8em;margin-right:4px;'>LOSS</a>"
+            active_rows += "<a href='/cancel_trade?symbol=" + sym + "' style='color:#888;text-decoration:none;border:1px solid #444;padding:2px 6px;border-radius:3px;font-size:0.8em;'>CANCEL</a>"
+            active_rows += "</td></tr>"
+    else:
+        active_rows = "<tr><td colspan='7' style='color:#444;text-align:center;padding:15px;'>No active trades</td></tr>"
     wins = len([t for t in trade_log if t["result"] == "win"])
     losses = len([t for t in trade_log if t["result"] == "loss"])
     total = wins + losses
@@ -349,24 +382,29 @@ def dashboard():
         dir_color = "#00ff88" if t["direction"] == "long" else "#ff4444"
         trade_log_rows += "<tr>"
         trade_log_rows += "<td style='color:#888'>" + t["time"] + "</td>"
+        trade_log_rows += "<td style='color:#777'>" + t["date"] + "</td>"
         trade_log_rows += "<td style='color:#fff'>" + t["symbol"] + "</td>"
         trade_log_rows += "<td style='color:" + dir_color + "'>" + t["direction"].upper() + "</td>"
+        trade_log_rows += "<td style='color:#ccc'>" + str(t["entry"]) + "</td>"
+        trade_log_rows += "<td style='color:#ff6b6b'>" + str(t["stop_loss"]) + "</td>"
+        trade_log_rows += "<td style='color:#00ff88'>" + str(t["take_profit"]) + "</td>"
         trade_log_rows += "<td style='color:" + res_color + ";font-weight:bold'>" + res_label + "</td>"
-        trade_log_rows += "<td style='color:#ffaa00'>" + t["score"] + "</td>"
+        trade_log_rows += "<td style='color:#ffaa00'>" + str(t["score"]) + "</td>"
         trade_log_rows += "</tr>"
     if not trade_log:
-        trade_log_rows = "<tr><td colspan='5' style='color:#444;text-align:center;padding:20px;'>No trades logged today</td></tr>"
+        trade_log_rows = "<tr><td colspan='9' style='color:#444;text-align:center;padding:20px;'>No trades logged today</td></tr>"
+    now = datetime.now(timezone.utc) + timedelta(hours=3)
     html = """<!DOCTYPE html>
 <html>
 <head>
 <meta name='viewport' content='width=device-width, initial-scale=1'>
-<title>PHILIP'S TRADE DESK</title>
+<title>Philip's Trade Desk</title>
 <meta http-equiv='refresh' content='30'>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { background: #0a0a0f; color: #fff; font-family: monospace; padding: 10px; }
 h1 { color: #00ff88; text-align: center; padding: 15px 0; font-size: 1.4em; letter-spacing: 2px; }
-h2 { color: #00ff88; text-align: center; margin-top: 30px; font-size: 1.1em; letter-spacing: 2px; }
+h2 { color: #00ff88; text-align: center; margin-top: 30px; margin-bottom: 8px; font-size: 1.0em; letter-spacing: 2px; }
 .sub { text-align: center; color: #555; font-size: 0.8em; margin-bottom: 15px; }
 table { width: 100%; border-collapse: collapse; font-size: 0.75em; }
 th { background: #111; color: #00ff88; padding: 8px 4px; text-align: left; border-bottom: 1px solid #222; }
@@ -382,12 +420,14 @@ tr:hover { background: #111; }
 </head>
 <body>
 <h1>PHILIP'S TRADE DESK</h1>
-<p class='sub'>""" + (datetime.now(timezone.utc) + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S") + """ · Auto-refresh 30s</p>
+<p class='sub'>""" + now.strftime("%Y-%m-%d %H:%M:%S") + """ EAT · Auto-refresh 30s</p>
 <div class='links'>
 <a href='/dashboard'>Refresh</a>
 <a href='/scan'>JSON</a>
 <a href='/health'>Health</a>
 </div>
+
+<h2>LIVE SIGNALS</h2>
 <table>
 <tr>
 <th>Symbol</th><th>Score</th><th>Dir</th>
@@ -396,33 +436,33 @@ tr:hover { background: #111; }
 </tr>""" + rows + """
 </table>
 
+<h2>ACTIVE TRADES</h2>
+<p class='sub'>Locked until you mark WIN / LOSS / CANCEL</p>
+<table>
+<tr>
+<th>Symbol</th><th>Dir</th><th>Entry</th>
+<th>SL</th><th>TP</th><th>Score</th><th>Action</th>
+</tr>""" + active_rows + """
+</table>
+
 <h2>TODAY'S TRADE LOG</h2>
-<p class='sub'>Tap a symbol row to log your trade</p>
-<div class='links'>""" + "".join([
-    "<a href='/log?symbol=" + r.get("symbol","") +
-    "&dir=" + (r.get("direction") or "long") +
-    "&result=win&score=" + str(r.get("score",0)) +
-    "' style='color:#00ff88;border-color:#00ff88'>" + r.get("symbol","") + " W</a>" +
-    "<a href='/log?symbol=" + r.get("symbol","") +
-    "&dir=" + (r.get("direction") or "long") +
-    "&result=loss&score=" + str(r.get("score",0)) +
-    "' style='color:#ff4444;border-color:#ff4444'>" + r.get("symbol","") + " L</a>"
-    for r in results if r.get("signal")
-]) + """
-<a href='/clearlog' style='color:#888;border-color:#444'>Clear</a>
+<div class='links'>
+<a href='/clearlog' style='color:#888;border-color:#444;'>Clear Log</a>
 </div>
 <table>
 <tr>
-<th>Time</th><th>Symbol</th><th>Dir</th><th>Result</th><th>Score</th>
+<th>Time</th><th>Date</th><th>Symbol</th><th>Dir</th>
+<th>Entry</th><th>SL</th><th>TP</th><th>Result</th><th>Score</th>
 </tr>""" + trade_log_rows + """
 </table>
+
 <div class='stats'>
 <div><div class='stat-val' style='color:#00ff88'>""" + str(wins) + """</div><div class='stat-lbl'>WINS</div></div>
 <div><div class='stat-val' style='color:#ff4444'>""" + str(losses) + """</div><div class='stat-lbl'>LOSSES</div></div>
 <div><div class='stat-val' style='color:#ffaa00'>""" + str(winrate) + """%</div><div class='stat-lbl'>WIN RATE</div></div>
 <div><div class='stat-val' style='color:#fff'>""" + str(total) + """</div><div class='stat-lbl'>TOTAL</div></div>
 </div>
-<p class='footer'>Pinpoint Trading System</p>
+<p class='footer'>Philip's Trade Desk · Pinpoint System</p>
 </body>
 </html>"""
     return html
