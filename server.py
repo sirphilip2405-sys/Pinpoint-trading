@@ -2,13 +2,11 @@ from flask import Flask, request, jsonify, redirect
 import requests
 from datetime import datetime, timezone, timedelta
 import os
-import threading
-import time
 
 app = Flask(__name__)
 
 WATCHLIST = ["BTCUSDT", "ETHUSDT", "GBPUSDT", "EURUSDT", "XAUUSDT", "USDTJPY"]
-ACCOUNT_BALANCE = 10
+ACCOUNT_BALANCE = 20
 RISK_PCT = 0.01
 ATR_MULTIPLIER = 1.5
 MIN_RR = 3.0
@@ -22,9 +20,8 @@ active_trades = {}
 signal_history = {}
 notified_signals = set()
 
-# ─── NEWS CALENDAR ───────────────────────────────────────────
 NEWS_EVENTS = [
-    {"name": "NFP (Non-Farm Payrolls)", "day": 4, "hour": 15, "minute": 30, "pairs": ["EURUSDT", "GBPUSDT", "XAUUSDT", "USDTJPY"]},
+    {"name": "NFP", "day": 4, "hour": 15, "minute": 30, "pairs": ["EURUSDT", "GBPUSDT", "XAUUSDT", "USDTJPY"]},
     {"name": "US CPI", "day": 1, "hour": 15, "minute": 30, "pairs": ["EURUSDT", "GBPUSDT", "XAUUSDT", "USDTJPY"]},
     {"name": "Fed Rate Decision", "day": 2, "hour": 21, "minute": 0, "pairs": ["EURUSDT", "GBPUSDT", "XAUUSDT", "USDTJPY", "BTCUSDT", "ETHUSDT"]},
     {"name": "BOE Rate Decision", "day": 3, "hour": 14, "minute": 0, "pairs": ["GBPUSDT"]},
@@ -58,16 +55,14 @@ def is_market_session():
         return True, "London Session"
     if 16 <= hour < 20:
         return True, "New York Session"
-    if 10 <= hour < 20:
+    if 13 <= hour < 16:
         return True, "London/NY Overlap"
     return False, "Off-session hours"
 
 def check_news_filter(symbol):
     now = get_eat_time()
     current_weekday = now.weekday()
-    current_hour = now.hour
-    current_minute = now.minute
-    current_total = current_hour * 60 + current_minute
+    current_total = now.hour * 60 + now.minute
     for event in NEWS_EVENTS:
         if symbol not in event["pairs"]:
             continue
@@ -80,12 +75,10 @@ def check_news_filter(symbol):
 
 def check_correlations(symbol, direction):
     warnings = []
-    correlated = CORRELATIONS.get(symbol, [])
-    for sym in correlated:
+    for sym in CORRELATIONS.get(symbol, []):
         if sym in active_trades:
-            active_dir = active_trades[sym].get("direction")
-            if active_dir == direction:
-                warnings.append(sym + " already " + direction)
+            if active_trades[sym].get("direction") == direction:
+                warnings.append(sym)
     return warnings
 
 def send_telegram(message):
@@ -167,7 +160,7 @@ def get_live_price(symbol):
                 "XAUUSDT": "GC=F",
                 "USDTJPY": "USDJPY=X"
             }
-            ticker = forex_map.get(symbol)
+            ticker = forex_map[symbol]
             url = "https://query1.finance.yahoo.com/v8/finance/chart/" + ticker
             params = {"interval": "1m", "range": "1d"}
             headers = {"User-Agent": "Mozilla/5.0"}
@@ -246,9 +239,9 @@ def detect_structure(candles, lookback=10):
     }
 
 def calculate_pips(symbol, entry, exit_price, direction):
-    if symbol in ["USDTJPY"]:
+    if symbol == "USDTJPY":
         multiplier = 100
-    elif symbol in ["XAUUSDT"]:
+    elif symbol == "XAUUSDT":
         multiplier = 10
     elif symbol in ["BTCUSDT", "ETHUSDT"]:
         multiplier = 1
@@ -259,6 +252,60 @@ def calculate_pips(symbol, entry, exit_price, direction):
     else:
         pips = (entry - exit_price) * multiplier
     return round(pips, 1)
+
+def check_sl_tp_hits():
+    for symbol in list(active_trades.keys()):
+        try:
+            trade = active_trades[symbol]
+            price = get_live_price(symbol)
+            if not price:
+                continue
+            entry = trade.get("entry", 0)
+            sl = trade.get("stop_loss", 0)
+            tp = trade.get("take_profit", 0)
+            direction = trade.get("direction", "")
+            hit = None
+            if direction == "long":
+                if price >= tp:
+                    hit = "win"
+                elif price <= sl:
+                    hit = "loss"
+            elif direction == "short":
+                if price <= tp:
+                    hit = "win"
+                elif price >= sl:
+                    hit = "loss"
+            if hit:
+                now = get_eat_time()
+                exit_price = tp if hit == "win" else sl
+                pips = calculate_pips(symbol, entry, exit_price, direction)
+                risk_dist = abs(entry - sl)
+                profit_usd = round(pips * (ACCOUNT_BALANCE * RISK_PCT / risk_dist) if risk_dist > 0 else 0, 2)
+                trade_log.append({
+                    "time": now.strftime("%H:%M"),
+                    "date": now.strftime("%Y-%m-%d"),
+                    "symbol": symbol,
+                    "direction": direction,
+                    "entry": entry,
+                    "exit": round(exit_price, 5),
+                    "stop_loss": sl,
+                    "take_profit": tp,
+                    "score": trade.get("score", 0),
+                    "result": hit,
+                    "pips": pips,
+                    "profit_usd": profit_usd,
+                    "auto": True
+                })
+                del active_trades[symbol]
+                emoji = "✅" if hit == "win" else "❌"
+                send_telegram(
+                    emoji + " <b>AUTO CLOSED</b>\n"
+                    "📊 <b>" + symbol + "</b> " + direction.upper() + "\n"
+                    "Result: <b>" + hit.upper() + "</b>\n"
+                    "Pips: " + str(pips) + " | P&L: $" + str(profit_usd)
+                )
+        except:
+            continue
 
 def analyze(symbol):
     news_blocked, news_name = check_news_filter(symbol)
@@ -372,8 +419,8 @@ def analyze(symbol):
         notified_signals.add(signal_key)
         corr_text = ""
         if corr_warnings:
-            corr_text = "\n⚠️ Correlation: " + ", ".join(corr_warnings)
-        msg = (
+            corr_text = "\n⚠️ Correlated: " + ", ".join(corr_warnings)
+        send_telegram(
             "🎯 <b>PINPOINT SIGNAL</b>\n\n"
             "📊 <b>" + symbol + "</b> — " + direction.upper() + "\n"
             "Score: " + str(round(score, 1)) + "/100\n\n"
@@ -382,10 +429,8 @@ def analyze(symbol):
             "TP: " + str(round(tp, 5)) + "\n"
             "RR: 1:" + str(MIN_RR) + "\n"
             "Size: " + str(size) + "\n\n"
-            "📝 " + " | ".join(reasons) +
-            corr_text
+            "📝 " + " | ".join(reasons) + corr_text
         )
-        send_telegram(msg)
     return {
         "symbol": symbol,
         "score": round(score, 1),
@@ -394,97 +439,6 @@ def analyze(symbol):
         "correlation_warning": corr_warnings,
         "signal": signal
     }
-
-def auto_check_sl_tp():
-    while True:
-        try:
-            for symbol in list(active_trades.keys()):
-                trade = active_trades[symbol]
-                price = get_live_price(symbol)
-                if not price:
-                    continue
-                entry = trade.get("entry", 0)
-                sl = trade.get("stop_loss", 0)
-                tp = trade.get("take_profit", 0)
-                direction = trade.get("direction", "")
-                hit = None
-                if direction == "long":
-                    if price >= tp:
-                        hit = "win"
-                    elif price <= sl:
-                        hit = "loss"
-                elif direction == "short":
-                    if price <= tp:
-                        hit = "win"
-                    elif price >= sl:
-                        hit = "loss"
-                if hit:
-                    now = get_eat_time()
-                    exit_price = tp if hit == "win" else sl
-                    pips = calculate_pips(symbol, entry, exit_price, direction)
-                    profit_usd = round(pips * (ACCOUNT_BALANCE * RISK_PCT / abs(entry - sl)) if abs(entry - sl) > 0 else 0, 2)
-                    trade_log.append({
-                        "time": now.strftime("%H:%M"),
-                        "date": now.strftime("%Y-%m-%d"),
-                        "symbol": symbol,
-                        "direction": direction,
-                        "entry": entry,
-                        "exit": round(exit_price, 5),
-                        "stop_loss": sl,
-                        "take_profit": tp,
-                        "score": trade.get("score", 0),
-                        "result": hit,
-                        "pips": pips,
-                        "profit_usd": profit_usd,
-                        "auto": True
-                    })
-                    del active_trades[symbol]
-                    emoji = "✅" if hit == "win" else "❌"
-                    send_telegram(
-                        emoji + " <b>TRADE CLOSED (AUTO)</b>\n\n"
-                        "📊 <b>" + symbol + "</b> — " + direction.upper() + "\n"
-                        "Result: <b>" + hit.upper() + "</b>\n"
-                        "Entry: " + str(entry) + "\n"
-                        "Exit: " + str(round(exit_price, 5)) + "\n"
-                        "Pips: " + str(pips) + "\n"
-                        "P&L: $" + str(profit_usd)
-                    )
-        except Exception as e:
-            pass
-        time.sleep(300)
-
-def daily_summary():
-    while True:
-        try:
-            now = get_eat_time()
-            if now.hour == 18 and now.minute < 5:
-                wins = len([t for t in trade_log if t["result"] == "win"])
-                losses = len([t for t in trade_log if t["result"] == "loss"])
-                total = wins + losses
-                winrate = round((wins / total * 100)) if total > 0 else 0
-                total_pips = sum([t.get("pips", 0) for t in trade_log])
-                total_profit = sum([t.get("profit_usd", 0) for t in trade_log])
-                best = max(trade_log, key=lambda x: x.get("pips", 0)) if trade_log else None
-                worst = min(trade_log, key=lambda x: x.get("pips", 0)) if trade_log else None
-                msg = (
-                    "📊 <b>DAILY SUMMARY</b> — " + now.strftime("%Y-%m-%d") + "\n\n"
-                    "✅ Wins: " + str(wins) + "\n"
-                    "❌ Losses: " + str(losses) + "\n"
-                    "📈 Win Rate: " + str(winrate) + "%\n"
-                    "💰 Total Pips: " + str(round(total_pips, 1)) + "\n"
-                    "💵 P&L: $" + str(round(total_profit, 2)) + "\n"
-                )
-                if best:
-                    msg += "\n🏆 Best: " + best["symbol"] + " +" + str(best.get("pips", 0)) + " pips"
-                if worst:
-                    msg += "\n💔 Worst: " + worst["symbol"] + " " + str(worst.get("pips", 0)) + " pips"
-                send_telegram(msg)
-        except:
-            pass
-        time.sleep(60)
-
-threading.Thread(target=auto_check_sl_tp, daemon=True).start()
-threading.Thread(target=daily_summary, daemon=True).start()
 
 @app.route("/health")
 def health():
@@ -503,12 +457,8 @@ def health():
 def scan():
     results = []
     for symbol in WATCHLIST:
-    try:
-        result = analyze(symbol)
-        if result:
-            results.append(result)
-        else:
-            results.append({"symbol": symbol, "score": 0, "reason": "No data", "signal": None})
+        try:
+            results.append(analyze(symbol))
         except Exception as e:
             results.append({"symbol": symbol, "score": 0, "reason": str(e)})
     results.sort(key=lambda x: x["score"], reverse=True)
@@ -531,4 +481,71 @@ def webhook():
         if symbol not in webhook_cache:
             webhook_cache[symbol] = {}
         webhook_cache[symbol][tf] = data
-    return
+    return jsonify({"status": "ok"})
+
+@app.route("/close_trade")
+def close_trade():
+    symbol = request.args.get("symbol", "").upper()
+    result = request.args.get("result", "")
+    if symbol in active_trades and result in ["win", "loss"]:
+        t = active_trades[symbol]
+        now = get_eat_time()
+        entry = t.get("entry", 0)
+        sl = t.get("stop_loss", 0)
+        exit_price = t.get("take_profit", 0) if result == "win" else sl
+        direction = t.get("direction", "")
+        pips = calculate_pips(symbol, entry, exit_price, direction)
+        risk_dist = abs(entry - sl)
+        profit_usd = round(pips * (ACCOUNT_BALANCE * RISK_PCT / risk_dist) if risk_dist > 0 else 0, 2)
+        trade_log.append({
+            "time": now.strftime("%H:%M"),
+            "date": now.strftime("%Y-%m-%d"),
+            "symbol": symbol,
+            "direction": direction,
+            "entry": entry,
+            "exit": round(exit_price, 5),
+            "stop_loss": sl,
+            "take_profit": t.get("take_profit", 0),
+            "score": t.get("score", 0),
+            "result": result,
+            "pips": pips,
+            "profit_usd": profit_usd,
+            "auto": False
+        })
+        del active_trades[symbol]
+        emoji = "✅" if result == "win" else "❌"
+        send_telegram(
+            emoji + " <b>TRADE CLOSED</b>\n"
+            "📊 <b>" + symbol + "</b> " + direction.upper() + "\n"
+            "Result: <b>" + result.upper() + "</b>\n"
+            "Pips: " + str(pips) + " | P&L: $" + str(profit_usd)
+        )
+    return redirect("/dashboard")
+
+@app.route("/cancel_trade")
+def cancel_trade():
+    symbol = request.args.get("symbol", "").upper()
+    if symbol in active_trades:
+        del active_trades[symbol]
+    return redirect("/dashboard")
+
+@app.route("/clearlog")
+def clear_log():
+    trade_log.clear()
+    notified_signals.clear()
+    return redirect("/dashboard")
+
+@app.route("/weekly")
+def weekly():
+    now = get_eat_time()
+    by_pair = {}
+    by_day = {}
+    for t in trade_log:
+        sym = t["symbol"]
+        if sym not in by_pair:
+            by_pair[sym] = {"wins": 0, "losses": 0, "pips": 0}
+        by_pair[sym]["wins" if t["result"] == "win" else "losses"] += 1
+        by_pair[sym]["pips"] += t.get("pips", 0)
+        day = t.get("date", "unknown")
+        if day not in by_day:
+  
