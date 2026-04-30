@@ -557,7 +557,9 @@ def weekly():
         by_pair[sym]["pips"] += t.get("pips", 0)
         day = t.get("date", "unknown")
         if day not in by_day:
-            by_day[day] = {"wins": 0, "losses": 0}@app.route("/dashboard")
+            by_day[day] = {"wins": 0, "losses": 0}
+
+@app.route("/dashboard")
 def dashboard():
     try:
         check_sl_tp_hits()
