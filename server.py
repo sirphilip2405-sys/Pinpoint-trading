@@ -1,25 +1,79 @@
-from flask import Flask, request, jsonify
-import requests
-import json
-from datetime import datetime
+il Sales", "day": 1, "hour": 15, "minute": 30, "pairs": ["EURUSDT", "GBPUSDT", "XAUUSDT"]},
+    {"name": "US GDP", "day": 3, "hour": 15, "minute": 30, "pairs": ["EURUSDT", "GBPUSDT", "XAUUSDT", "USDTJPY"]},
+    {"name": "FOMC Minutes", "day": 2, "hour": 21, "minute": 0, "pairs": ["EURUSDT", "GBPUSDT", "XAUUSDT", "USDTJPY"]},
+    {"name": "BOJ Rate Decision", "day": 4, "hour": 3, "minute": 0, "pairs": ["USDTJPY"]},
+    {"name": "US PPI", "day": 1, "hour": 15, "minute": 30, "pairs": ["EURUSDT", "GBPUSDT", "XAUUSDT"]},
+]
 
-app = Flask(__name__)
+CORRELATIONS = {
+    "EURUSDT": ["GBPUSDT"],
+    "GBPUSDT": ["EURUSDT"],
+    "XAUUSDT": ["BTCUSDT"],
+    "BTCUSDT": ["ETHUSDT", "XAUUSDT"],
+    "ETHUSDT": ["BTCUSDT"],
+    "USDTJPY": [],
+}
 
-WATCHLIST = ["BTCUSDT", "ETHUSDT", "XAUUSDT", "EURUSDT", "GBPUSDT"]
-ACCOUNT_BALANCE = 10000
-RISK_PCT = 0.01
-ATR_MULTIPLIER = 1.5
-MIN_RR = 3.0
+def get_eat_time():
+    return datetime.now(timezone.utc) + timedelta(hours=3)
 
-webhook_cache = {}
-live_signals = {}
+def is_market_session():
+    now = get_eat_time()
+    hour = now.hour
+    weekday = now.weekday()
+    if weekday >= 5:
+        return False, "Weekend - markets closed"
+    if 10 <= hour < 13:
+        return True, "London Session"
+    if 16 <= hour < 20:
+        return True, "New York Session"
+    if 13 <= hour < 16:
+        return True, "London/NY Overlap"
+    return False, "Off-session hours"
+
+def check_news_filter(symbol):
+    now = get_eat_time()
+    current_weekday = now.weekday()
+    current_total = now.hour * 60 + now.minute
+    for event in NEWS_EVENTS:
+        if symbol not in event["pairs"]:
+            continue
+        if current_weekday != event["day"]:
+            continue
+        event_total = event["hour"] * 60 + event["minute"]
+        if abs(current_total - event_total) <= 30:
+            return True, event["name"]
+    return False, None
+
+def check_correlations(symbol, direction):
+    warnings = []
+    for sym in CORRELATIONS.get(symbol, []):
+        if sym in active_trades:
+            if active_trades[sym].get("direction") == direction:
+                warnings.append(sym)
+    return warnings
+
+def send_telegram(message):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    try:
+        url = "https://api.telegram.org/bot" + TELEGRAM_TOKEN + "/sendMessage"
+        requests.post(url, json={
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message,
+            "parse_mode": "HTML"
+        }, timeout=10)
+    except:
+        pass
 
 def fetch_binance_ohlcv(symbol, interval, limit=100):
     try:
-        url = f"https://api.binance.com/api/v3/klines"
+        url = "https://api.binance.com/api/v3/klines"
         params = {"symbol": symbol, "interval": interval, "limit": limit}
         r = requests.get(url, params=params, timeout=10)
         data = r.json()
+        if isinstance(data, dict) and data.get("code"):
+            return fetch_forex_ohlcv(symbol, interval, limit)
         candles = []
         for d in data:
             candles.append({
@@ -30,7 +84,66 @@ def fetch_binance_ohlcv(symbol, interval, limit=100):
                 "volume": float(d[5])
             })
         return candles
-    except Exception as e:
+    except:
+        return fetch_forex_ohlcv(symbol, interval, limit)
+
+def fetch_forex_ohlcv(symbol, interval, limit=100):
+    try:
+        forex_map = {
+            "EURUSDT": "EURUSD=X",
+            "GBPUSDT": "GBPUSD=X",
+            "XAUUSDT": "GC=F",
+            "USDTJPY": "USDJPY=X"
+        }
+        tf_map = {"15m": "15m", "30m": "30m", "1h": "1h"}
+        ticker = forex_map.get(symbol, symbol)
+        interval_yf = tf_map.get(interval, "1h")
+        period = "5d" if interval in ["15m", "30m"] else "30d"
+        url = "https://query1.finance.yahoo.com/v8/finance/chart/" + ticker
+        params = {"interval": interval_yf, "range": period}
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, params=params, headers=headers, timeout=10)
+        data = r.json()
+        result = data["chart"]["result"][0]
+        timestamps = result["timestamp"]
+        ohlcv = result["indicators"]["quote"][0]
+        candles = []
+        for i in range(len(timestamps)):
+            try:
+                candles.append({
+                    "open": float(ohlcv["open"][i]),
+                    "high": float(ohlcv["high"][i]),
+                    "low": float(ohlcv["low"][i]),
+                    "close": float(ohlcv["close"][i]),
+                    "volume": float(ohlcv.get("volume", [1000]*len(timestamps))[i] or 1000)
+                })
+            except:
+                continue
+        return candles[-limit:] if len(candles) > limit else candles
+    except:
+        return None
+
+def get_live_price(symbol):
+    try:
+        if symbol in ["EURUSDT", "GBPUSDT", "XAUUSDT", "USDTJPY"]:
+            forex_map = {
+                "EURUSDT": "EURUSD=X",
+                "GBPUSDT": "GBPUSD=X",
+                "XAUUSDT": "GC=F",
+                "USDTJPY": "USDJPY=X"
+            }
+            ticker = forex_map[symbol]
+            url = "https://query1.finance.yahoo.com/v8/finance/chart/" + ticker
+            params = {"interval": "1m", "range": "1d"}
+            headers = {"User-Agent": "Mozilla/5.0"}
+            r = requests.get(url, params=params, headers=headers, timeout=10)
+            data = r.json()
+            return float(data["chart"]["result"][0]["meta"]["regularMarketPrice"])
+        else:
+            url = "https://api.binance.com/api/v3/ticker/price"
+            r = requests.get(url, params={"symbol": symbol}, timeout=10)
+            return float(r.json()["price"])
+    except:
         return None
 
 def compute_atr(candles, period=14):
@@ -83,10 +196,10 @@ def detect_structure(candles, lookback=10):
         trend = "bearish"
         if close < recent_low:
             bos = True
-    if prev_high < prev_high and close > recent_high:
+    if prev_high < recent_high and close > recent_high:
         choch = True
         trend = "bullish"
-    elif prev_low > prev_low and close < recent_low:
+    elif prev_low > recent_low and close < recent_low:
         choch = True
         trend = "bearish"
     return {
@@ -97,8 +210,81 @@ def detect_structure(candles, lookback=10):
         "swing_low": recent_low
     }
 
+def calculate_pips(symbol, entry, exit_price, direction):
+    if symbol == "USDTJPY":
+        multiplier = 100
+    elif symbol == "XAUUSDT":
+        multiplier = 10
+    elif symbol in ["BTCUSDT", "ETHUSDT"]:
+        multiplier = 1
+    else:
+        multiplier = 10000
+    if direction == "long":
+        pips = (exit_price - entry) * multiplier
+    else:
+        pips = (entry - exit_price) * multiplier
+    return round(pips, 1)
+
+def check_sl_tp_hits():
+    for symbol in list(active_trades.keys()):
+        try:
+            trade = active_trades[symbol]
+            price = get_live_price(symbol)
+            if not price:
+                continue
+            entry = trade.get("entry", 0)
+            sl = trade.get("stop_loss", 0)
+            tp = trade.get("take_profit", 0)
+            direction = trade.get("direction", "")
+            hit = None
+            if direction == "long":
+                if price >= tp:
+                    hit = "win"
+                elif price <= sl:
+                    hit = "loss"
+            elif direction == "short":
+                if price <= tp:
+                    hit = "win"
+                elif price >= sl:
+                    hit = "loss"
+            if hit:
+                now = get_eat_time()
+                exit_price = tp if hit == "win" else sl
+                pips = calculate_pips(symbol, entry, exit_price, direction)
+                risk_dist = abs(entry - sl)
+                profit_usd = round(pips * (ACCOUNT_BALANCE * RISK_PCT / risk_dist) if risk_dist > 0 else 0, 2)
+                trade_log.append({
+                    "time": now.strftime("%H:%M"),
+                    "date": now.strftime("%Y-%m-%d"),
+                    "symbol": symbol,
+                    "direction": direction,
+                    "entry": entry,
+                    "exit": round(exit_price, 5),
+                    "stop_loss": sl,
+                    "take_profit": tp,
+                    "score": trade.get("score", 0),
+                    "result": hit,
+                    "pips": pips,
+                    "profit_usd": profit_usd,
+                    "auto": True
+                })
+                del active_trades[symbol]
+                emoji = "✅" if hit == "win" else "❌"
+                send_telegram(
+                    emoji + " <b>AUTO CLOSED</b>\n"
+                    "📊 <b>" + symbol + "</b> " + direction.upper() + "\n"
+                    "Result: <b>" + hit.upper() + "</b>\n"
+                    "Pips: " + str(pips) + " | P&L: $" + str(profit_usd)
+                )
+        except:
+            continue
+
 def analyze(symbol):
-    tf_map = {"M5": "5m", "M15": "15m", "H1": "1h"}
+    news_blocked, news_name = check_news_filter(symbol)
+    if news_blocked:
+        return {"symbol": symbol, "score": 0,
+                "reason": "NEWS BLOCK: " + news_name, "signal": None}
+    tf_map = {"M15": "15m", "M30": "30m", "H1": "1h"}
     tf_data = {}
     for tf, interval in tf_map.items():
         candles = fetch_binance_ohlcv(symbol, interval)
@@ -109,58 +295,58 @@ def analyze(symbol):
                 "rsi": compute_rsi(candles),
                 "structure": detect_structure(candles)
             }
-    if len(tf_data) < 2:
+    if len(tf_data) < 1:
         return {"symbol": symbol, "score": 0,
                 "reason": "Not enough data", "signal": None}
     h1 = tf_data.get("H1", {})
-    m5 = tf_data.get("M5", {})
     m15 = tf_data.get("M15", {})
+    m30 = tf_data.get("M30", {})
     h1_trend = h1.get("structure", {}).get("trend", "neutral")
-    m5_trend = m5.get("structure", {}).get("trend", "neutral")
-    m15_trend = m15.get("structure", {}).get("trend", "neutral") if m15 else "neutral"
+    m15_trend = m15.get("structure", {}).get("trend", "neutral")
+    m30_trend = m30.get("structure", {}).get("trend", "neutral") if m30 else "neutral"
     score = 0
     reasons = []
     direction = None
-    if h1_trend == m5_trend and h1_trend != "neutral":
+    if h1_trend == m15_trend and h1_trend != "neutral":
         score += 30
         direction = "long" if h1_trend == "bullish" else "short"
-        reasons.append(f"H1+M5 trend confluent ({h1_trend})")
+        reasons.append("H1+M15 confluent (" + h1_trend + ")")
     else:
         return {"symbol": symbol, "score": 0,
-                "reason": f"Trend mismatch H1={h1_trend} M5={m5_trend}",
+                "reason": "Trend mismatch H1=" + h1_trend + " M15=" + m15_trend,
                 "signal": None}
-    m5_struct = m5.get("structure", {})
-    if m5_struct.get("choch"):
+    m15_struct = m15.get("structure", {})
+    if m15_struct.get("choch"):
         score += 25
-        reasons.append("M5 CHoCH confirmed")
-    elif m5_struct.get("bos"):
+        reasons.append("M15 CHoCH")
+    elif m15_struct.get("bos"):
         score += 20
-        reasons.append("M5 BoS confirmed")
+        reasons.append("M15 BoS")
     h1_struct = h1.get("structure", {})
     if h1_struct.get("bos") or h1_struct.get("choch"):
         score += 15
         reasons.append("H1 structure confirmed")
-    m5_rsi = m5.get("rsi", 50)
-    if direction == "long" and 30 < m5_rsi < 65:
+    m15_rsi = m15.get("rsi", 50)
+    if direction == "long" and 30 < m15_rsi < 65:
         score += 10
-        reasons.append(f"RSI healthy ({m5_rsi})")
-    elif direction == "short" and 35 < m5_rsi < 70:
+        reasons.append("RSI healthy (" + str(m15_rsi) + ")")
+    elif direction == "short" and 35 < m15_rsi < 70:
         score += 10
-        reasons.append(f"RSI healthy ({m5_rsi})")
-    if m15_trend == h1_trend:
+        reasons.append("RSI healthy (" + str(m15_rsi) + ")")
+    if m30_trend == h1_trend:
         score += 10
-        reasons.append("M15 confirms trend")
-    entry = m5["candles"][-1]["close"]
-    atr = m5.get("atr", entry * 0.001)
-    swing_high = m5_struct.get("swing_high")
-    swing_low = m5_struct.get("swing_low")
+        reasons.append("M30 confirms")
+    entry = m15["candles"][-1]["close"]
+    atr = m15.get("atr", entry * 0.001)
+    m15_swing_high = m15_struct.get("swing_high")
+    m15_swing_low = m15_struct.get("swing_low")
     if direction == "long":
         sl_atr = entry - ATR_MULTIPLIER * atr
-        sl_swing = swing_low if swing_low and swing_low < entry else sl_atr
+        sl_swing = m15_swing_low if m15_swing_low and m15_swing_low < entry else sl_atr
         stop_loss = max(sl_atr, sl_swing)
     else:
         sl_atr = entry + ATR_MULTIPLIER * atr
-        sl_swing = swing_high if swing_high and swing_high > entry else sl_atr
+        sl_swing = m15_swing_high if m15_swing_high and m15_swing_high > entry else sl_atr
         stop_loss = min(sl_atr, sl_swing)
     risk = abs(entry - stop_loss)
     if risk < 0.000001:
@@ -168,6 +354,7 @@ def analyze(symbol):
                 "reason": "Invalid SL", "signal": None}
     tp = entry + risk * MIN_RR if direction == "long" else entry - risk * MIN_RR
     size = round((ACCOUNT_BALANCE * RISK_PCT) / risk, 4)
+    corr_warnings = check_correlations(symbol, direction)
     signal = {
         "symbol": symbol,
         "direction": direction,
@@ -179,6 +366,7 @@ def analyze(symbol):
         "risk_usd": round(ACCOUNT_BALANCE * RISK_PCT, 2),
         "score": round(score, 1),
         "reason": " | ".join(reasons),
+        "correlation_warning": corr_warnings,
         "timeframes": {
             tf: {
                 "trend": d.get("structure", {}).get("trend"),
@@ -188,16 +376,53 @@ def analyze(symbol):
         }
     }
     live_signals[symbol] = signal
-    return {"symbol": symbol, "score": round(score, 1),
-            "direction": direction, "reason": " | ".join(reasons),
-            "signal": signal}
+    if symbol not in active_trades:
+        active_trades[symbol] = signal
+    if symbol not in signal_history:
+        signal_history[symbol] = []
+    signal_history[symbol].append({
+        "time": get_eat_time().strftime("%H:%M"),
+        "score": round(score, 1),
+        "direction": direction
+    })
+    signal_history[symbol] = signal_history[symbol][-20:]
+    signal_key = symbol + "_" + str(round(score, 1)) + "_" + direction
+    if score >= 70 and signal_key not in notified_signals:
+        notified_signals.add(signal_key)
+        corr_text = ""
+        if corr_warnings:
+            corr_text = "\n⚠️ Correlated: " + ", ".join(corr_warnings)
+        send_telegram(
+            "🎯 <b>PINPOINT SIGNAL</b>\n\n"
+            "📊 <b>" + symbol + "</b> — " + direction.upper() + "\n"
+            "Score: " + str(round(score, 1)) + "/100\n\n"
+            "Entry: " + str(round(entry, 5)) + "\n"
+            "SL: " + str(round(stop_loss, 5)) + "\n"
+            "TP: " + str(round(tp, 5)) + "\n"
+            "RR: 1:" + str(MIN_RR) + "\n"
+            "Size: " + str(size) + "\n\n"
+            "📝 " + " | ".join(reasons) + corr_text
+        )
+    return {
+        "symbol": symbol,
+        "score": round(score, 1),
+        "direction": direction,
+        "reason": " | ".join(reasons),
+        "correlation_warning": corr_warnings,
+        "signal": signal
+    }
 
 @app.route("/health")
 def health():
+    session_active, session_name = is_market_session()
     return jsonify({
         "status": "running",
-        "time": datetime.now().isoformat(),
-        "watchlist": WATCHLIST
+        "time_eat": get_eat_time().strftime("%Y-%m-%d %H:%M:%S"),
+        "session": session_name,
+        "session_active": session_active,
+        "watchlist": WATCHLIST,
+        "active_trades": len(active_trades),
+        "telegram_configured": bool(TELEGRAM_TOKEN)
     })
 
 @app.route("/scan")
@@ -229,98 +454,70 @@ def webhook():
             webhook_cache[symbol] = {}
         webhook_cache[symbol][tf] = data
     return jsonify({"status": "ok"})
-@app.route("/dashboard")
-def dashboard():
-    results = []
-    for symbol in WATCHLIST:
-        try:
-            results.append(analyze(symbol))
-        except Exception as e:
-            results.append({"symbol": symbol, "score": 0, "reason": str(e), "signal": None})
-    results.sort(key=lambda x: x["score"], reverse=True)
 
-    rows = ""
-    for r in results:
-        score = r.get("score", 0)
-        symbol = r.get("symbol", "")
-        reason = r.get("reason", "")
-        direction = r.get("direction", "-")
-        signal = r.get("signal") or {}
-        entry = signal.get("entry", "-")
-        sl = signal.get("stop_loss", "-")
-        tp = signal.get("take_profit", "-")
-        size = signal.get("position_size", "-")
+@app.route("/close_trade")
+def close_trade():
+    symbol = request.args.get("symbol", "").upper()
+    result = request.args.get("result", "")
+    if symbol in active_trades and result in ["win", "loss"]:
+        t = active_trades[symbol]
+        now = get_eat_time()
+        entry = t.get("entry", 0)
+        sl = t.get("stop_loss", 0)
+        exit_price = t.get("take_profit", 0) if result == "win" else sl
+        direction = t.get("direction", "")
+        pips = calculate_pips(symbol, entry, exit_price, direction)
+        risk_dist = abs(entry - sl)
+        profit_usd = round(pips * (ACCOUNT_BALANCE * RISK_PCT / risk_dist) if risk_dist > 0 else 0, 2)
+        trade_log.append({
+            "time": now.strftime("%H:%M"),
+            "date": now.strftime("%Y-%m-%d"),
+            "symbol": symbol,
+            "direction": direction,
+            "entry": entry,
+            "exit": round(exit_price, 5),
+            "stop_loss": sl,
+            "take_profit": t.get("take_profit", 0),
+            "score": t.get("score", 0),
+            "result": result,
+            "pips": pips,
+            "profit_usd": profit_usd,
+            "auto": False
+        })
+        del active_trades[symbol]
+        emoji = "✅" if result == "win" else "❌"
+        send_telegram(
+            emoji + " <b>TRADE CLOSED</b>\n"
+            "📊 <b>" + symbol + "</b> " + direction.upper() + "\n"
+            "Result: <b>" + result.upper() + "</b>\n"
+            "Pips: " + str(pips) + " | P&L: $" + str(profit_usd)
+        )
+    return redirect("/dashboard")
 
-        if score >= 70:
-            color = "#00ff88"
-            emoji = "🟢"
-        elif score >= 40:
-            color = "#ffaa00"
-            emoji = "🟡"
-        else:
-            color = "#ff4444"
-            emoji = "🔴"
+@app.route("/cancel_trade")
+def cancel_trade():
+    symbol = request.args.get("symbol", "").upper()
+    if symbol in active_trades:
+        del active_trades[symbol]
+    return redirect("/dashboard")
 
-        dir_color = "#00ff88" if direction == "long" else "#ff4444" if direction == "short" else "#888"
+@app.route("/clearlog")
+def clear_log():
+    trade_log.clear()
+    notified_signals.clear()
+    return redirect("/dashboard")
 
-        rows += f"""
-        <tr>
-            <td><b style='color:#fff'>{symbol}</b></td>
-            <td><span style='color:{color};font-size:1.3em;font-weight:bold'>{emoji} {score}</span></td>
-            <td><span style='color:{dir_color}'>{direction.upper() if direction else '-'}</span></td>
-            <td style='color:#ccc'>{entry}</td>
-            <td style='color:#ff6b6b'>{sl}</td>
-            <td style='color:#00ff88'>{tp}</td>
-            <td style='color:#aaa'>{size}</td>
-            <td style='color:#888;font-size:0.8em'>{reason[:60]}...</td>
-        </tr>"""
-
-    html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta name='viewport' content='width=device-width, initial-scale=1'>
-    <title>Pinpoint Trading</title>
-    <meta http-equiv='refresh' content='30'>
-    <style>
-        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-        body {{ background: #0a0a0f; color: #fff; font-family: monospace; padding: 10px; }}
-        h1 {{ color: #00ff88; text-align: center; padding: 15px 0; font-size: 1.4em; letter-spacing: 2px; }}
-        .subtitle {{ text-align: center; color: #555; font-size: 0.8em; margin-bottom: 15px; }}
-        table {{ width: 100%; border-collapse: collapse; font-size: 0.75em; }}
-        th {{ background: #111; color: #00ff88; padding: 8px 4px; text-align: left; border-bottom: 1px solid #222; }}
-        td {{ padding: 8px 4px; border-bottom: 1px solid #111; vertical-align: middle; }}
-        tr:hover {{ background: #111; }}
-        .refresh {{ text-align: center; color: #333; font-size: 0.7em; margin-top: 15px; }}
-        .links {{ display: flex; gap: 10px; justify-content: center; margin: 10px 0; flex-wrap: wrap; }}
-        .links a {{ color: #00ff88; text-decoration: none; border: 1px solid #00ff88; padding: 5px 10px; border-radius: 4px; font-size: 0.8em; }}
-    </style>
-</head>
-<body>
-    <h1>⚡ PINPOINT TRADING</h1>
-    <p class='subtitle'>Auto-refresh every 30s · {datetime.now().strftime("%H:%M:%S")}</p>
-    <div class='links'>
-        <a href='/dashboard'>🔄 Refresh</a>
-        <a href='/signals'>📡 Signals JSON</a>
-        <a href='/scan'>📊 Raw Scan</a>
-        <a href='/health'>💚 Health</a>
-    </div>
-    <table>
-        <tr>
-            <th>Symbol</th>
-            <th>Score</th>
-            <th>Dir</th>
-            <th>Entry</th>
-            <th>SL</th>
-            <th>TP</th>
-            <th>Size</th>
-            <th>Reason</th>
-        </tr>
-        {rows}
-    </table>
-    <p class='refresh'>Auto-refreshes every 30 seconds</p>
-</body>
-</html>"""
-    return html
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000, debug=False)
+@app.route("/weekly")
+def weekly():
+    now = get_eat_time()
+    by_pair = {}
+    by_day = {}
+    for t in trade_log:
+        sym = t["symbol"]
+        if sym not in by_pair:
+            by_pair[sym] = {"wins": 0, "losses": 0, "pips": 0}
+        by_pair[sym]["wins" if t["result"] == "win" else "losses"] += 1
+        by_pair[sym]["pips"] += t.get("pips", 0)
+        day = t.get("date", "unknown")
+        if day not in by_day:
+  
