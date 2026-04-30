@@ -1,9 +1,46 @@
-il Sales", "day": 1, "hour": 15, "minute": 30, "pairs": ["EURUSDT", "GBPUSDT", "XAUUSDT"]},
+from flask import Flask, request, jsonify, redirect
+import requests
+from datetime import datetime, timezone, timedelta
+import os
+
+app = Flask(__name__)
+
+WATCHLIST = ["BTCUSDT", "ETHUSDT", "GBPUSDT", "EURUSDT", "XAUUSDT", "USDTJPY"]
+ACCOUNT_BALANCE = 10000
+RISK_PCT = 0.01
+ATR_MULTIPLIER = 1.5
+MIN_RR = 3.0
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+webhook_cache = {}
+live_signals = {}
+trade_log = []
+active_trades = {}
+signal_history = {}
+notified_signals = set()
+
+NEWS_EVENTS = [
+    {"name": "NFP", "day": 4, "hour": 15, "minute": 30, "pairs": ["EURUSDT", "GBPUSDT", "XAUUSDT", "USDTJPY"]},
+    {"name": "US CPI", "day": 1, "hour": 15, "minute": 30, "pairs": ["EURUSDT", "GBPUSDT", "XAUUSDT", "USDTJPY"]},
+    {"name": "Fed Rate Decision", "day": 2, "hour": 21, "minute": 0, "pairs": ["EURUSDT", "GBPUSDT", "XAUUSDT", "USDTJPY", "BTCUSDT", "ETHUSDT"]},
+    {"name": "BOE Rate Decision", "day": 3, "hour": 14, "minute": 0, "pairs": ["GBPUSDT"]},
+    {"name": "ECB Rate Decision", "day": 3, "hour": 14, "minute": 15, "pairs": ["EURUSDT"]},
+    {"name": "US Retail Sales", "day": 1, "hour": 15, "minute": 30, "pairs": ["EURUSDT", "GBPUSDT", "XAUUSDT"]},
     {"name": "US GDP", "day": 3, "hour": 15, "minute": 30, "pairs": ["EURUSDT", "GBPUSDT", "XAUUSDT", "USDTJPY"]},
     {"name": "FOMC Minutes", "day": 2, "hour": 21, "minute": 0, "pairs": ["EURUSDT", "GBPUSDT", "XAUUSDT", "USDTJPY"]},
     {"name": "BOJ Rate Decision", "day": 4, "hour": 3, "minute": 0, "pairs": ["USDTJPY"]},
     {"name": "US PPI", "day": 1, "hour": 15, "minute": 30, "pairs": ["EURUSDT", "GBPUSDT", "XAUUSDT"]},
 ]
+
+CORRELATIONS = {
+    "EURUSDT": ["GBPUSDT"],
+    "GBPUSDT": ["EURUSDT"],
+    "XAUUSDT": ["BTCUSDT"],
+    "BTCUSDT": ["ETHUSDT", "XAUUSDT"],
+    "ETHUSDT": ["BTCUSDT"],
+    "USDTJPY": [],
+}
 
 CORRELATIONS = {
     "EURUSDT": ["GBPUSDT"],
@@ -520,4 +557,4 @@ def weekly():
         by_pair[sym]["pips"] += t.get("pips", 0)
         day = t.get("date", "unknown")
         if day not in by_day:
-  
+            by_day[day] = {"wins": 0, "losses": 0}
