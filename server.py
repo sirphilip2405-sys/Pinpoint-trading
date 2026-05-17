@@ -471,6 +471,7 @@ def dashboard():
         it=now_eat.weekday()==event['day']; rc='#ffaa00' if it else '#555'
         nr+='<tr><td style=color:'+rc+'>'+dn+'</td><td style=color:'+rc+'>'+ts+' EAT</td><td style=color:#fff>'+event['name']+'</td><td style=color:#888;font-size:0.8em>'+ps+'</td></tr>'
     now=get_eat_time()
+    h=""
     h+="<h1>PHILIPS TRADE DESK</h1>"
     h+='<div style=text-align:center;margin-bottom:6px><span class=badge style=background:#0d1a0d;color:'+sc+';border:1px solid '+sc+'>● '+sn+'</span><span class=badge style=background:#0d0d1a;color:'+kc+';border:1px solid '+kc+'>⚡ '+('KILL ZONE' if kz else 'no kill zone')+'</span><span class=badge style=background:#1a0d0d;color:'+dc+';border:1px solid '+dc+'>📅 '+('GOOD DAY' if gd else 'low prob day')+'</span></div>'
     h+='<p class=sub>'+now.strftime('%Y-%m-%d %H:%M:%S')+' EAT · Auto-refresh 30s</p>'
