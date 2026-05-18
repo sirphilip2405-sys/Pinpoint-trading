@@ -321,6 +321,20 @@ def analyze(symbol):
         send_telegram('🎯 <b>SOVEREIGN SIGNAL</b> '+me+'\n\n<b>'+symbol+'</b> — '+direction.upper()+'\nMode: '+mode.upper()+'\nScore: '+str(combined)+'/100\nSovereign: '+str(sov)+'/100\n\nEntry: '+str(round(entry,5))+'\nSL: '+str(round(stop_loss,5))+'\nTP1: '+str(round(tp1,5))+' (1:2)\nTP2: '+str(round(tp,5))+' (1:'+str(rr)+')\nSize: '+str(size)+ct)
     return {'symbol':symbol,'score':combined,'sovereign_score':sov,'market_mode':mode,'direction':direction,'reason':' | '.join(all_reasons),'correlation_warning':corr,'signal':signal}
 
+import threading
+import time
+
+def background_checker():
+    while True:
+        try:
+            check_sl_tp_hits()
+        except:
+            pass
+        time.sleep(60)
+
+checker_thread = threading.Thread(target=background_checker, daemon=True)
+checker_thread.start()
+
 @app.route('/health')
 def health():
     sa,sn=is_market_session()
