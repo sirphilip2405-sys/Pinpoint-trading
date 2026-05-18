@@ -6,7 +6,7 @@ import os
 app = Flask(__name__)
 
 WATCHLIST = ["BTCUSDT", "ETHUSDT", "GBPUSDT", "EURUSDT", "XAUUSDT", "USDTJPY"]
-ACCOUNT_BALANCE = 10000
+ACCOUNT_BALANCE = 20
 RISK_PCT = 0.01
 MIN_LOT = 0.01
 ATR_MULTIPLIER = 1.5
@@ -301,7 +301,15 @@ def analyze(symbol):
     corr=check_correlations(symbol,direction)
     signal={'symbol':symbol,'direction':direction,'entry':round(entry,5),'stop_loss':round(stop_loss,5),'take_profit':round(tp,5),'tp1':round(tp1,5),'rr_ratio':rr,'position_size':size,'risk_usd':round(ACCOUNT_BALANCE*RISK_PCT,2),'score':combined,'sovereign_score':sov,'market_mode':mode,'reason':' | '.join(all_reasons),'correlation_warning':corr}
     live_signals[symbol]=signal
-    if symbol not in active_trades: active_trades[symbol]=signal
+    if symbol not in active_trades:
+        active_trades[symbol]={
+            'symbol':symbol,'direction':direction,'entry':round(entry,5),
+            'stop_loss':round(stop_loss,5),'take_profit':round(tp,5),
+            'tp1':round(tp1,5),'rr_ratio':rr,'position_size':size,
+            'risk_usd':round(ACCOUNT_BALANCE*RISK_PCT,2),'score':combined,
+            'sovereign_score':sov,'market_mode':mode,
+            'reason':' | '.join(all_reasons),'correlation_warning':corr
+        }
     if symbol not in signal_history: signal_history[symbol]=[]
     signal_history[symbol].append({'time':get_eat_time().strftime('%H:%M'),'score':combined,'sovereign_score':sov,'direction':direction,'mode':mode})
     signal_history[symbol]=signal_history[symbol][-20:]
